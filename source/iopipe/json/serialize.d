@@ -23,11 +23,19 @@ import iopipe.json.dom;
 public import iopipe.json.common;
 import iopipe.traits;
 import iopipe.bufpipe;
-import std.range.primitives;
 
+version(unittest)
+    import std.stdio;
+
+import std.array;
+import std.conv;
+import std.format;
+import std.range;
 import std.traits;
 import std.typecons : Nullable;
 import std.conv;
+import std.uni;
+import std.utf;
 
 // define some UDAs to affect serialization
 struct IgnoredMembers { string[] ignoredMembers; }
@@ -88,7 +96,7 @@ unittest {
     static struct S { X x; Y y; }
     auto s = S(X.a, Y.a);
     auto sstr = s.serialize;
-    assert(sstr == `{"x" : "a", "y" : 0}`);
+    assert(sstr == `{"x":"a","y":0}`);
     auto s2 = sstr.deserialize!S;
     assert(s2.x == X.a && s2.y == Y.a);
 }
@@ -136,7 +144,7 @@ unittest {
 
     T t = deserialize!(T)(`{"alternate": "valid"}`);
     assert(t.name == "valid");
-    assert(t.serialize == `{"alternate" : "valid"}`);
+    assert(t.serialize == `{"alternate":"valid"}`);
     deserialize!(T)(`{"name": "invalid"}`).assertThrown;
 }
 
@@ -174,7 +182,7 @@ unittest {
     assert(t.s == "hi");
     assert(t.x == 1);
 
-    assert(t.serialize == `{"s" : "hi", "x" : 1}`);
+    assert(t.serialize == `{"s":"hi","x":1}`);
 }
 
 /**
@@ -186,7 +194,6 @@ void jsonExpect(JSONItem item, JSONToken expectedToken, string msg, string file 
 {
     if(item.token != expectedToken)
     {
-        import std.format;
         throw new JSONIopipeException(format("%s: expected %s, got %s", msg, expectedToken, item.token), file, line);
     }
 }
@@ -239,7 +246,6 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy 
     auto jsonItem = tokenizer.nextSignificant;
     jsonExpect(jsonItem, JSONToken.ArrayStart, "Parsing " ~ T.stringof);
 
-    import std.array : Appender;
     auto app = Appender!T();
 
     // check for an empty array (special case)
@@ -326,7 +332,6 @@ unittest
 
 private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy) if (!is(T == enum) && isNumeric!T)
 {
-    import std.format : format;
     auto jsonItem = tokenizer.nextSignificant;
     jsonExpect(jsonItem, JSONToken.Number, "Parsing " ~ T.stringof);
 
@@ -395,7 +400,6 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
 
 private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy) if (is(T == bool))
 {
-    import std.format : format;
     auto jsonItem = tokenizer.nextSignificant;
     if(jsonItem.token == JSONToken.True)
     {
@@ -407,7 +411,6 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
     }
     else
     {
-        import std.format;
         throw new JSONIopipeException(format("Parsing bool: expected %s or %s , but got %s", JSONToken.True, JSONToken.False, jsonItem.token));
     }
 }
@@ -415,7 +418,6 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
 private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy) if (isSomeString!T)
 {
     // Use phobos `to`, we want to duplicate the string if necessary.
-    import std.format : format;
 
     auto jsonItem = tokenizer.nextSignificant;
     jsonExpect(jsonItem, JSONToken.String, "Parsing " ~ T.stringof);
@@ -426,7 +428,6 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
 
 private template SerializableMembers(T)
 {
-    import std.traits;
     import std.meta;
     enum WithoutIgnore(string s) = !hasUDA!(__traits(getMember, T, s), ignore);
     static if(is(T == struct))
@@ -437,7 +438,6 @@ private template SerializableMembers(T)
 
 private template AllIgnoredMembers(T)
 {
-    import std.traits;
     import std.meta;
     static if(is(T == struct))
         enum AllIgnoredMembers = getUDAs!(T, IgnoredMembers);
@@ -569,7 +569,6 @@ OBJ_MEMBER_SWITCH:
             }}
             else
             {
-                import std.format : format;
                 throw new JSONIopipeException(format("No member named '%s' in type `%s`", name, T.stringof));
             }
         }
@@ -589,8 +588,6 @@ OBJ_MEMBER_SWITCH:
         {
             // this is a bit ugly, but gives a nicer message.
             static immutable marr = [members];
-            import std.format;
-            import std.range : enumerate;
             throw new JSONIopipeException(format("The following members of `%s` were not specified: `%-(%s` `%)`", T.stringof, visited[].enumerate.filter!(a => !a[1]).map!(a => marr[a[0]])));
         }
     }
@@ -599,7 +596,6 @@ OBJ_MEMBER_SWITCH:
 private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy relPol) if (is(T == struct) && !isInstanceOf!(JSONValue, T) && !isInstanceOf!(Nullable, T) && !__traits(hasMember, T, "fromJSON"))
 {
     // check to see if any member is defined as the representation
-    import std.traits;
     alias representers = getSymbolsByUDA!(T, serializeAs);
     static if(representers.length > 0)
     {
@@ -970,124 +966,525 @@ unittest
     assert(cArr.length == 3);
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val) if (__traits(isStaticArray, T))
+//alias OutputDelegate(Char) = void delegate(const(Char)[]);
+
+struct FormattingOptions
 {
-    auto arr = val;
-    serializeImpl(w, val[]);
+    bool lineBreaks;
+    bool spaceAfterColon;
+    private bool _spaceBetweenItems;
+    // Only makes sense if lineBreaks == false
+    bool spaceBetweenItems() => !lineBreaks && _spaceBetweenItems;
+    bool spaceBetweenItems(bool value)
+    {
+        _spaceBetweenItems = value;
+        return spaceBetweenItems;
+    }
+    bool trailingCommas;
+    bool preferUnquotedKeys;
+    bool preferSingleQuotes;
+    string quoteText() => preferSingleQuotes ? "'" : "\"";
+    private bool _indentation;
+    // Only makes sense if lineBreaks == true
+    bool indentation() => lineBreaks && _indentation;
+    bool indentation(bool value)
+    {
+        _indentation = value;
+        return indentation;
+    }
+    int indentationLevel;
+    string indentationText;
+    
+    FormattingOptions indent()
+    {
+        FormattingOptions fo = this;
+        fo.indentationLevel++;
+        return fo;
+    }
 }
 
 unittest
 {
     // ensure static array serialization works
     int[5] arr = [1,2,3,4,5];
-    assert(serialize(arr) == "[1, 2, 3, 4, 5]");
+    assert(serialize(arr) == "[1,2,3,4,5]");
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val) if (is(T == enum))
+/// Returns:
+///     Whether the string is a valid ECMA 5.1 identifier name.
+///     Used for checking if JSON5 key can be written without quotes.
+bool isEcmaIdentifierName(S)(S str)
+    if (isInputRange!S && isSomeChar!(ElementEncodingType!S))
+{
+    static CodepointSet L;
+    static CodepointSet Nd;
+    static CodepointSet Nl;
+    static CodepointSet Mn;
+    static CodepointSet Mc;
+    static CodepointSet Pc;
+    
+    if (str.length == 0)
+        return false;
+    
+    static bool initialized = false;
+    if (!initialized)
+    {
+        // These are expensive.
+        L = unicode.L;
+        Nd = unicode.Nd;
+        Nl = unicode.Nl;
+        Mn = unicode.Mn;
+        Mc = unicode.Mc;
+        Pc = unicode.Pc;
+        initialized = true;
+    }
+    
+    dchar firstChar = decodeFront!(UseReplacementDchar.yes)(str);
+    
+    if (firstChar !in L && firstChar != '$' && firstChar != '_')
+        return false;
+    
+    foreach (dchar c; str)
+    {
+        if (c !in L &&
+            c !in Nd &&
+            c !in Nl &&
+            c !in Mn &&
+            c !in Mc &&
+            c !in Pc &&
+            c != '$' &&
+            c != '_'
+        )
+            return false;
+    }
+    return true;
+}
+
+unittest
+{
+    assert(isEcmaIdentifierName("$iden_tifier2"));
+    assert(isEcmaIdentifierName("ĞÜŞİÖÇğüşıöç"));
+    assert(isEcmaIdentifierName("idẽn̈tifieꦾr‿٩٨٣٤"));
+}
+
+private void doIndentation(Char)(scope void delegate(const(Char)[]) w, ref FormattingOptions fo)
+{
+    if (fo.indentation)
+        foreach (i; 0 .. fo.indentationLevel)
+            w(fo.indentationText);
+}
+
+// Static Arrays
+void serializeImpl(T : V[n], Char, V, size_t n)(scope void delegate(const(Char)[]) w, ref T val, FormattingOptions fo = FormattingOptions.init)
+{
+    auto arr = val;
+    serializeImpl(w, val[], fo);
+}
+
+// Enums
+void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, auto ref T val, FormattingOptions fo = FormattingOptions.init)
+    if (is(T == enum))
 {
     // enums are special, serialize based on the name. Unless there's a UDA
     // saying to serialize as the base type.
     static if(hasUDA!(T, enumBaseType))
     {
-        serializeImpl(w, *cast(OriginalType!T*)&val);
+        serializeImpl(w, *cast(OriginalType!T*)&val, fo);
     }
     else
     {
         auto enumName = val.to!string;
-        serializeImpl(w, enumName);
+        serializeImpl(w, enumName, fo);
     }
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val) if (isDynamicArray!T && !isSomeString!T && !is(T == enum))
+// Arrays
+void serializeImpl(T : C[], Char, C)(scope void delegate(const(Char)[]) w, T val, FormattingOptions fo = FormattingOptions.init)
+    if (!isSomeString!T && !is(T == enum))
 {
-    // open brace
-    w("[");
+    if (val.length == 0)
+    {
+        w("[]");
+        return;
+    }
+    
+    if (fo.lineBreaks)
+        w("[\n");
+    else
+        w("[");
+    
+    FormattingOptions indented = fo.indent();
+    
+    doIndentation(w, indented);
+    
     bool first = true;
     foreach(ref item; val)
     {
-        if(first)
+        if (first)
             first = false;
         else
-            w(", ");
-        serializeImpl(w, item);
+        {
+            w(fo.spaceBetweenItems ? ", ": ",");
+            if (fo.lineBreaks)
+                w("\n");
+            doIndentation(w, indented);
+        }
+        
+        serializeImpl(w, item, indented);
     }
+    if (fo.trailingCommas)
+        w(fo.spaceBetweenItems ? ", ": ",");
+    if (fo.lineBreaks)
+        w("\n");
+    doIndentation(w, fo);
     w("]");
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val) if (is(T == V[K], V, K) /* && isSomeString!K */)
+enum bool isJSONKey(K, Char) = is(typeof((K key) { key.toJSONKey(delegate void(const(Char)[] s) { }); } (K.init)));
+
+void outputJSONKey(K, Char)(K key, scope void delegate(const(Char)[]) w)
+    if (isSomeChar!Char)
 {
-    assert(is(T == V[K], V, K));
-    enum useKW = !isSomeString!K;
-    // provide a specialized key serialization function if the type is not a string
-    static if(useKW)
+    static if (isSomeString!K)
+        w(key);
+    else static if (isBuiltinType!K)
+        w(key.to!(Char[]));
+    else static if (isJSONKey!(K, Char))
+        key.toJSONKey(w);
+    else
+        static assert(0, "Key in AA of type " ~ T.stringof ~ " does not implement the appropriate 'void toJSONKey(Char)(" ~ K.stringof ~ " key, scope void delegate(const(" ~ Char.stringof ~ ")[]))' function.");
+}
+
+void escapeString(S, Char)(scope S str, scope void delegate(const(Char)[]) w, bool singleQuote = false)
+    if (isInputRange!S && isSomeChar!(ElementEncodingType!S) && isSomeChar!Char)
+{
+    foreach (dchar c; str)
     {
-        // "key write" function. key must always start and end with a quote
-        // (sorry, json5, we are doing it this way for now with AAs)
-        bool keyStart;
-        bool keyEnd;
-        void kw(const(Char)[] str)
+        switch (c)
         {
-            if(!keyStart)
-            {
-                // validate that the key starts with "
-                if(str[0] != '"')
-                    throw new JSONIopipeException("Key in AA of type " ~ T.stringof ~ " must serialize to string that starts with a quote");
-                keyStart = true;
-            }
-            keyEnd = str[$-1] == '"';
-            w(str);
+            case '\\':
+                w("\\\\");
+                break;
+            
+            case '"':
+                if (!singleQuote)
+                    w("\\\"");
+                break;
+            
+            case '\'':
+                if (singleQuote)
+                    w("\\'");
+                break;
+            
+            case '\b':
+                w("\\b");
+                break;
+            
+            case '\f':
+                w("\\f");
+                break;
+            
+            case '\n':
+                w("\\n");
+                break;
+            
+            case '\r':
+                w("\\r");
+                break;
+            
+            case '\t':
+                w("\\t");
+                break;
+            
+            default:
+                if (isControl(c))
+                {
+                    formattedWrite(w, "\\u%04x", c);
+                }
+                else
+                {
+                    scope Char[4 / Char.sizeof] buf;
+                    size_t len = encode(buf, c);
+                    w(buf[0 .. len]);
+                }
+                break;
         }
     }
+}
 
-    // open brace
-    w("{");
+unittest
+{
+    string str = "\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n";
+    string escaped = `\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n`;
+    wstring strw = "\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n"w;
+    wstring escapedw = `\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n`w;
+    dstring strd = "\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n"d;
+    dstring escapedd = `\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n`d;
+    
+    Appender!(char[]) strBuf = appender!(char[]);
+    escapeString(
+        str,
+        (const(char)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        str,
+        (const(wchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        str,
+        (const(dchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strw,
+        (const(char)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strw,
+        (const(wchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strw,
+        (const(dchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strd,
+        (const(char)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strd,
+        (const(wchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    escapeString(
+        strd,
+        (const(dchar)[] s) { strBuf.put(s); },
+    );
+    assert(strBuf[] == escaped);
+    strBuf.clear();
+    
+    Appender!(wchar[]) strwBuf = appender!(wchar[]);
+    escapeString(
+        str,
+        (const(char)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        str,
+        (const(wchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        str,
+        (const(dchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strw,
+        (const(char)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strw,
+        (const(wchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strw,
+        (const(dchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strd,
+        (const(char)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strd,
+        (const(wchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    escapeString(
+        strd,
+        (const(dchar)[] s) { strwBuf.put(s); },
+    );
+    assert(strwBuf[] == escapedw);
+    strwBuf.clear();
+    
+    Appender!(dchar[]) strdBuf = appender!(dchar[]);
+    escapeString(
+        str,
+        (const(char)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        str,
+        (const(wchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        str,
+        (const(dchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strw,
+        (const(char)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strw,
+        (const(wchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strw,
+        (const(dchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strd,
+        (const(char)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strd,
+        (const(wchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+    escapeString(
+        strd,
+        (const(dchar)[] s) { strdBuf.put(s); },
+    );
+    assert(strdBuf[] == escapedd);
+    strdBuf.clear();
+}
+
+void serializeKeyValuePair(K, V, Char)(scope void delegate(const(Char)[]) w, K key, V value, bool assumeIdentifierKey, FormattingOptions fo = FormattingOptions.init)
+{
+    if (fo.preferUnquotedKeys)
+    {
+        if (assumeIdentifierKey)
+            outputJSONKey(key, w);
+        else
+        {
+            auto jsonKeyBuf = appender!(Char[]);
+            outputJSONKey(key, (const(Char)[] s) { escapeString(s, (const(Char)[] s) { jsonKeyBuf.put(s); }, fo.preferSingleQuotes); });
+            Char[] jsonKey = jsonKeyBuf[];
+            bool needQuotes = !isEcmaIdentifierName(jsonKey);
+            if (needQuotes)
+                w(fo.quoteText);
+            w(jsonKey);
+            if (needQuotes)
+                w(fo.quoteText);
+        }
+    }
+    else
+    {
+        w(fo.quoteText);
+        outputJSONKey(key, (const(Char)[] s) { escapeString(s, w, fo.preferSingleQuotes); });
+        w(fo.quoteText);
+    }
+    
+    w(fo.spaceAfterColon ? ": ": ":");
+    
+    serializeImpl(w, value, fo);
+}
+
+// Associative Arrays
+void serializeImpl(T : V[K], Char, V, K)(scope void delegate(const(Char)[]) w, T val, FormattingOptions fo = FormattingOptions.init)
+{
+    if (val.length == 0)
+    {
+        w("{}");
+        return;
+    }
+    
+    if (fo.lineBreaks)
+        w("{\n");
+    else
+        w("{");
+    
+    FormattingOptions indented = fo.indent();
+    
+    doIndentation(w, indented);
+    
     bool first = true;
     foreach(k, v; val)
     {
-        if(first)
+        if (first)
             first = false;
         else
-            w(", ");
-        static if(useKW)
         {
-            serializeImpl(&kw, k);
-
-            // validate the key ended
-            if(!keyEnd)
-                throw new JSONIopipeException("Key of type " ~ T.stringof ~ " must serialize to a string that ends with a quote");
+            w(fo.spaceBetweenItems ? ", ": ",");
+            if (fo.lineBreaks)
+                w("\n");
+            doIndentation(w, indented);
         }
-        else
-            serializeImpl(w, k);
-
-        w(" : ");
-
-        serializeImpl(w, v);
+        
+        serializeKeyValuePair(w, k, v, false, indented);
     }
+    if (fo.trailingCommas)
+        w(fo.spaceBetweenItems ? ", ": ",");
+    if (fo.lineBreaks)
+        w("\n");
+    doIndentation(w, fo);
     w("}");
 }
 
 unittest
 {
-    import std.stdio;
     auto serialized = serialize(["a" : 1, "b": 2]);
-    assert(serialized == `{"a" : 1, "b" : 2}` || serialized == `{"b" : 2, "a" : 1}`);
+    assert(serialized == `{"a":1,"b":2}` || serialized == `{"b":2,"a":1}`);
     enum X
     {
         a,
         b
     }
     serialized = serialize([X.a : 1, X.b: 2]);
-    assert(serialized == `{"a" : 1, "b" : 2}` || serialized == `{"b" : 2, "a" : 1}`);
+    assert(serialized == `{"a":1,"b":2}` || serialized == `{"b":2,"a":1}`);
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val) if (isSomeString!T)
+// Strings
+void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val, FormattingOptions fo = FormattingOptions.init)
+    if (isSomeString!T)
 {
-    w(`"`);
-    put(w, val);
-    w(`"`);
+    w(fo.quoteText);
+    escapeString(val, w, fo.preferSingleQuotes);
+    w(fo.quoteText);
 }
 
-void serializeAllMembers(T, Char)(scope void delegate(const(Char)[]) w, auto ref T val)
+void serializeAllMembers(T, Char)(scope void delegate(const(Char)[]) w, auto ref T val, FormattingOptions fo = FormattingOptions.init)
 {
     // serialize as an object
     bool first = true;
@@ -1098,76 +1495,72 @@ void serializeAllMembers(T, Char)(scope void delegate(const(Char)[]) w, auto ref
             // this is the extras member, It should be an object, with all the information inside there.
             foreach(k, ref v; __traits(getMember, val, n).object)
             {
-                if(first)
+                if (first)
                     first = false;
                 else
-                    w(", ");
-                w(`"`);
-                w(k);
-                w(`" : `);
-                serializeImpl(w, v);
+                {
+                    w(fo.spaceBetweenItems ? ", ": ",");
+                    if (fo.lineBreaks)
+                        w("\n");
+                    doIndentation(w, fo);
+                }
+                serializeKeyValuePair(w, k, v, true, fo);
             }
         }
         else
         {
-            if(first)
+            if (first)
                 first = false;
             else
-                w(", ");
-            w(`"`);
+            {
+                w(fo.spaceBetweenItems ? ", ": ",");
+                if (fo.lineBreaks)
+                    w("\n");
+                doIndentation(w, fo);
+            }
             static if(hasUDA!(__traits(getMember, T, n), alternateName))
-                w(getUDAs!(__traits(getMember, T, n), alternateName)[0].name);
+            {
+                auto name = getUDAs!(__traits(getMember, T, n), alternateName)[0].name;
+                serializeKeyValuePair(w, name, __traits(getMember, val, n), false, fo);
+            }
             else
-                w(n);
-            w(`" : `);
-            serializeImpl(w, __traits(getMember, val, n));
+                serializeKeyValuePair(w, n, __traits(getMember, val, n), true, fo);
         }
     }
+    if (fo.trailingCommas)
+        w(fo.spaceBetweenItems ? ", ": ",");
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val) if (is(T == struct))
+// Structs
+void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val, FormattingOptions fo = FormattingOptions.init)
+    if (is(T == struct))
 {
+    FormattingOptions indented = fo.indent;
     static if(isInstanceOf!(Nullable, T))
     {
         if(val.isNull)
             w("null");
         else
-            serializeImpl(w, val.get);
+            serializeImpl(w, val.get, fo);
     }
     else static if(isInstanceOf!(JSONValue, T))
     {
         with(JSONType) final switch(val.type)
         {
         case Integer:
-            serializeImpl(w, val.integer);
+            serializeImpl(w, val.integer, fo);
             break;
         case Floating:
-            serializeImpl(w, val.floating);
+            serializeImpl(w, val.floating, fo);
             break;
         case String:
-            serializeImpl(w, val.str);
+            serializeImpl(w, val.str, fo);
             break;
         case Array:
-            serializeImpl(w, val.array);
+            serializeImpl(w, val.array, fo);
             break;
         case Obj:
-            // serialize as if it was an object
-            w("{");
-            {
-                bool first = true;
-                foreach(k, ref v; val.object)
-                {
-                    if(first)
-                        first = false;
-                    else
-                        w(", ");
-                    w(`"`);
-                    w(k);
-                    w(`" : `);
-                    serializeImpl(w, v);
-                }
-            }
-            w("}");
+            serializeImpl(w, val.object, fo);
             break;
         case Null:
             w("null");
@@ -1186,32 +1579,60 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val) if 
         alias representers = getSymbolsByUDA!(T, serializeAs);
         // serialize as the single item
         static assert(representers.length == 1, "Only one field can be used to represent an object");
-        serializeImpl(w, __traits(getMember, val, __traits(identifier, representers[0])));
+        serializeImpl(w, __traits(getMember, val, __traits(identifier, representers[0])), fo);
     }
     else static if(isInputRange!T)
     {
-        // open brace
-        w("[");
+        if (fo.lineBreaks)
+            w("[\n");
+        else
+            w("[");
+        
+        doIndentation(w, indented);
+        
         bool first = true;
         foreach(ref item; val)
         {
-            if(first)
+            if (first)
                 first = false;
             else
-                w(", ");
-            serializeImpl(w, item);
+            {
+                w(fo.spaceBetweenItems ? ", ": ",");
+                if (fo.lineBreaks)
+                    w("\n");
+                doIndentation(w, indented);
+            }
+            
+            serializeImpl(w, item, indented);
         }
+        if (fo.trailingCommas)
+            w(fo.spaceBetweenItems ? ", ": ",");
+        if (fo.lineBreaks)
+            w("\n");
+        doIndentation(w, fo);
         w("]");
     }
     else
     {
-        w("{");
-        serializeAllMembers(w, val);
+        if (fo.lineBreaks)
+            w("{\n");
+        else
+            w("{");
+        
+        doIndentation(w, indented);
+        
+        serializeAllMembers(w, val, indented);
+        
+        if (fo.lineBreaks)
+            w("\n");
+        doIndentation(w, fo);
         w("}");
     }
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val) if (is(T == class) || is(T == interface))
+// Classes
+void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val, FormattingOptions fo = FormattingOptions.init)
+    if (is(T == class) || is(T == interface))
 {
     if(val is null)
     {
@@ -1226,8 +1647,20 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val) if (is(
     }
     else
     {
-        w("{");
-        serializeAllMembers(w, val);
+        if (fo.lineBreaks)
+            w("{\n");
+        else
+            w("{");
+        
+        FormattingOptions indented = fo.indent();
+        
+        doIndentation(w, indented);
+        
+        serializeAllMembers(w, val, indented);
+        
+        if (fo.lineBreaks)
+            w("\n");
+        doIndentation(w, fo);
         w("}");
     }
 }
@@ -1243,10 +1676,11 @@ unittest
     }
 
     S s;
-    assert(serialize(s) == `{"c" : null}`);
+    assert(serialize(s) == `{"c":null}`);
 }
 
-void serializeImpl(Char)(scope void delegate(const(Char)[]) w, typeof(null) val)
+// Null
+void serializeImpl(Char)(scope void delegate(const(Char)[]) w, typeof(null) val, FormattingOptions fo = FormattingOptions.init)
 {
     w("null");
 }
@@ -1258,16 +1692,30 @@ unittest
         typeof(null) n;
     }
     S s;
-    assert(serialize(s) == `{"n" : null}`);
+    assert(serialize(s) == `{"n":null}`);
 }
 
-void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val) if (!is(T == enum) && isNumeric!T)
+// Numbers
+void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val, FormattingOptions fo = FormattingOptions.init)
+    if (!is(T == enum) && isNumeric!T)
 {
-    import std.format;
-    formattedWrite(w, "%s", val);
+    import std.math.traits;
+    
+    static if (isFloatingPoint!T)
+    {
+        if (isNaN(val))
+            w("NaN");
+        else if (isInfinity(val))
+            w(val < 0 ? "-Infinity" : "Infinity");
+        else
+            formattedWrite(w, "%s", val);
+    }
+    else
+        formattedWrite(w, "%s", val);
 }
 
-void serializeImpl(Char)(scope void delegate(const(Char)[]) w, bool val)
+// Booleans
+void serializeImpl(Char)(scope void delegate(const(Char)[]) w, bool val, FormattingOptions fo = FormattingOptions.init)
 {
     w(val ? "true" : "false");
 }
@@ -1288,7 +1736,7 @@ void serializeImpl(Char)(scope void delegate(const(Char)[]) w, bool val)
 // elements that are in the buffer. If offset is specified, then that is where
 // the data will begin to be written.
 //
-size_t serialize(ReleaseOnWrite relOnWrite = ReleaseOnWrite.yes, Chain, T)(auto ref Chain chain, auto ref T val, size_t offset = 0)
+size_t serialize(ReleaseOnWrite relOnWrite = ReleaseOnWrite.yes, Chain, T)(auto ref Chain chain, auto ref T val, size_t offset = 0, FormattingOptions fo = FormattingOptions.init)
 if (isIopipe!Chain && isSomeChar!(ElementType!(WindowType!Chain)))
 {
     size_t result = 0;
@@ -1304,17 +1752,17 @@ if (isIopipe!Chain && isSomeChar!(ElementType!(WindowType!Chain)))
     }
 
     // serialize the item, recursively
-    serializeImpl(&w, val);
+    serializeImpl(&w, val, fo);
 
     return result;
 }
 
 // convenience, using normal serialization to write to a string.
-string serialize(T)(auto ref T val)
+string serialize(T)(auto ref T val, FormattingOptions fo = FormattingOptions.init)
 {
     import std.exception;
     auto outBuf = bufd!char;
-    auto dataSize = outBuf.serialize!(ReleaseOnWrite.no)(val);
+    auto dataSize = outBuf.serialize!(ReleaseOnWrite.no)(val, 0, fo);
     auto result = outBuf.window[0 .. dataSize];
     result.assumeSafeAppend;
     return result.assumeUnique;
@@ -1329,12 +1777,12 @@ unittest
     strpipe.deserialize(item1);
     assert(item1 == 1);
     auto str2 = serialize([1,2,3,4]);
-    assert(str2 == "[1, 2, 3, 4]");
+    assert(str2 == "[1,2,3,4]");
     int[4] item2;
     strpipe = str2;
     strpipe.deserialize(item2);
-    assert(item2[] == [1, 2, 3, 4]);
-    assert(str2 == "[1, 2, 3, 4]");
+    assert(item2[] == [1,2,3,4]);
+    assert(str2 == "[1,2,3,4]");
     static struct S
     {
         int x;
@@ -1343,11 +1791,11 @@ unittest
         bool b;
     }
 
-    assert(serialize(S(1, 2.5, "hi", true)) == `{"x" : 1, "y" : 2.5, "s" : "hi", "b" : true}`);
+    assert(serialize(S(1, 2.5, "hi", true)) == `{"x":1,"y":2.5,"s":"hi","b":true}`);
 
     // serialize nested arrays and objects
     auto str3 = serialize([S(1, 3.0, "foo", false), S(2, 8.5, "bar", true)]);
-    assert(str3 == `[{"x" : 1, "y" : 3, "s" : "foo", "b" : false}, {"x" : 2, "y" : 8.5, "s" : "bar", "b" : true}]`, str3);
+    assert(str3 == `[{"x":1,"y":3,"s":"foo","b":false},{"x":2,"y":8.5,"s":"bar","b":true}]`, str3);
     auto arr = str3.deserialize!(S[]);
     assert(arr.length == 2);
     assert(arr[0].s == "foo");
@@ -1365,7 +1813,7 @@ unittest
 
     auto s = S(1, true);
     auto str = s.serialize;
-    assert(str == `{"x" : 1}`, str);
+    assert(str == `{"x":1}`, str);
 
     static struct T
     {
@@ -1379,7 +1827,7 @@ unittest
     }
     auto u = U(T("hello", 1));
     auto str2 = u.serialize;
-    assert(str2 == `{"t" : "hello"}`, str2);
+    assert(str2 == `{"t":"hello"}`, str2);
 }
 
 unittest
@@ -1415,29 +1863,41 @@ unittest
     auto c = new C;
     c.x = 1;
     auto cstr = c.serialize;
-    assert(cstr == `{"x" : 1}`, cstr);
+    assert(cstr == `{"x":1}`, cstr);
 
     auto d = new D;
     d.x = 2;
     d.s = "str";
     auto dstr = d.serialize;
-    assert(dstr == `{"s" : "str", "x" : 2}`, dstr);
+    assert(dstr == `{"s":"str","x":2}`, dstr);
 
     auto e = new E;
     e.x = 3;
     e.s = "foo";
     e.d = 1.5;
     auto estr = e.serialize;
-    assert(estr == `{"d" : 1.5, "s" : "foo", "x" : 3}`, estr);
+    assert(estr == `{"d":1.5,"s":"foo","x":3}`, estr);
     d = e;
     assert(d.serialize == estr);
 }
 
 unittest
 {
+    // test serializing enums
+    enum X { a, b, c }
+    static struct S { X x; }
+    auto s = S(X.b);
+    auto sstr = s.serialize;
+    assert(sstr == `{"x":"b"}`);
+    auto s2 = sstr.deserialize!S;
+    assert(s2.x == X.b);
+}
+
+unittest
+{
     // test serializing JSONValue
     auto j = deserialize!(JSONValue!string)(`{"a": [1, 2, 3], "b": null}`);
-    assert(j.serialize == `{"a" : [1, 2, 3], "b" : null}`);
+    assert(j.serialize == `{"a":[1,2,3],"b":null}`);
 }
 
 // JSON5 tests
@@ -1467,7 +1927,6 @@ unittest
             ParseConfig(false, true, true, true),
             ])
     {{
-        import std.stdio;
         scope(failure) stderr.writeln("failing config is ", config);
         import std.math : isNaN, isClose;
         auto tokenizer = jsonStr.jsonTokenizer!config;
@@ -1498,7 +1957,7 @@ unittest
             assert(val.token == JSONToken.Number);
             assert(val.hint == JSONParseHint.Int);
             assert(tokenizer.nextSignificant.token == JSONToken.ObjectEnd);
-	    int x = val.data(tokenizer.chain).to!int;
+            int x = val.data(tokenizer.chain).to!int;
             return S(x, x*2);
         }
     }
