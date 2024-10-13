@@ -57,9 +57,9 @@ unittest {
     import std.exception;
     // This would only work with @ignoreExtras
     assert( 
-		    deserialize!(T)(`{"s": "invalid", "x": 1}`).collectExceptionMsg 
-		    == "Parsing string: expected String, got ObjectStart"
-	    );
+            deserialize!(T)(`{"s": "invalid", "x": 1}`).collectExceptionMsg 
+            == "Parsing string: expected String, got ObjectStart"
+        );
 }
 
 /**
@@ -104,7 +104,7 @@ enum extras;
 unittest {
     static struct T {
         string name;
-	@extras JSONValue!string stuff;
+    @extras JSONValue!string stuff;
     }
 
     T t = deserialize!(T)(`{"name": "valid", "a": "another string", "b": 2, "c": 8.5}`);
@@ -129,7 +129,7 @@ struct alternateName
  * The alternate name is not optional
  */
 unittest {
-	import std.exception;
+    import std.exception;
     static struct T {
         @alternateName("alternate") string name;
     }
@@ -180,7 +180,7 @@ unittest {
 /**
  * Expect the given JSONItem to be a specific token.
  * Throws:
- *	JSONIopipeException on violation.
+ *     JSONIopipeException on violation.
  */
 void jsonExpect(JSONItem item, JSONToken expectedToken, string msg, string file = __FILE__, size_t line = __LINE__) pure @safe
 {
@@ -682,7 +682,7 @@ unittest
 
 /** Deserialize the given type from the JSON data.
  * Throws:
- * 	JSONIopipeException on parser error.
+ *     JSONIopipeException on parser error.
  */
 T deserialize(T, JT)(ref JT tokenizer, ReleasePolicy relPol = ReleasePolicy.afterMembers) if (isInstanceOf!(JSONTokenizer, JT))
 {
@@ -1524,7 +1524,7 @@ unittest
             enforce!JSONIopipeException(xname.data(tokenizer.chain) == "x", "Unknown key");
             jsonExpect(tokenizer.nextSignificant, JSONToken.Colon, "Colon must follow key");
             auto val = tokenizer.nextSignificant;
-	    // ObjectEnd must be consumed by fromJSON
+            // ObjectEnd must be consumed by fromJSON
             jsonExpect(tokenizer.nextSignificant, JSONToken.ObjectEnd, "Last token shall be be ObjectStart");
             return S(val.data(tokenizer.chain).to!int);
         }
