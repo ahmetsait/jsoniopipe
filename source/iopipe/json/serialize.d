@@ -1,17 +1,17 @@
 /**
  * Serialize and deserialize arbitrary objects to/ from json
- * 
+ *
  * Both $(LREF serialize) and $(LREF deserialize) support 3 levels of detail.
  * If the template argument is just a type, they try to serialize it as
  * faithfully as possible.
  * For structs and classes, this means treating the fieldnames as keys in
  * a JSON object.
  * The type JSONValue can be used if dynamic objects are needed.
- * 
+ *
  * For more controls, the various UDAs defined here can be used on compound
  * types or their fields to customize the behaviour of this module in a
  * limited way.
- * 
+ *
  * If that is not enough, structs/ classes can define toJSON or a static
  * fromJSON method and take full control over how they are serialized.
  * For toJSON, $(LREF serializeAllMembers) might be useful. fromJSON will
@@ -64,8 +64,8 @@ unittest {
 
     import std.exception;
     // This would only work with @ignoreExtras
-    assert( 
-            deserialize!(T)(`{"s": "invalid", "x": 1}`).collectExceptionMsg 
+    assert(
+            deserialize!(T)(`{"s": "invalid", "x": 1}`).collectExceptionMsg
             == "Parsing string: expected String, got ObjectStart"
         );
 }
@@ -994,7 +994,7 @@ struct FormattingOptions
     }
     int indentationLevel;
     string indentationText;
-    
+
     FormattingOptions indent()
     {
         FormattingOptions fo = this;
@@ -1022,10 +1022,10 @@ bool isEcmaIdentifierName(S)(S str)
     static CodepointSet Mn;
     static CodepointSet Mc;
     static CodepointSet Pc;
-    
+
     if (str.length == 0)
         return false;
-    
+
     static bool initialized = false;
     if (!initialized)
     {
@@ -1038,12 +1038,12 @@ bool isEcmaIdentifierName(S)(S str)
         Pc = unicode.Pc;
         initialized = true;
     }
-    
+
     dchar firstChar = decodeFront!(UseReplacementDchar.yes)(str);
-    
+
     if (firstChar !in L && firstChar != '$' && firstChar != '_')
         return false;
-    
+
     foreach (dchar c; str)
     {
         if (c !in L &&
@@ -1107,16 +1107,16 @@ void serializeImpl(T : C[], Char, C)(scope void delegate(const(Char)[]) w, T val
         w("[]");
         return;
     }
-    
+
     if (fo.lineBreaks)
         w("[\n");
     else
         w("[");
-    
+
     FormattingOptions indented = fo.indent();
-    
+
     doIndentation(w, indented);
-    
+
     bool first = true;
     foreach(ref item; val)
     {
@@ -1129,7 +1129,7 @@ void serializeImpl(T : C[], Char, C)(scope void delegate(const(Char)[]) w, T val
                 w("\n");
             doIndentation(w, indented);
         }
-        
+
         serializeImpl(w, item, indented);
     }
     if (fo.trailingCommas)
@@ -1165,37 +1165,37 @@ void escapeString(S, Char)(scope S str, scope void delegate(const(Char)[]) w, bo
             case '\\':
                 w("\\\\");
                 break;
-            
+
             case '"':
                 if (!singleQuote)
                     w("\\\"");
                 break;
-            
+
             case '\'':
                 if (singleQuote)
                     w("\\'");
                 break;
-            
+
             case '\b':
                 w("\\b");
                 break;
-            
+
             case '\f':
                 w("\\f");
                 break;
-            
+
             case '\n':
                 w("\\n");
                 break;
-            
+
             case '\r':
                 w("\\r");
                 break;
-            
+
             case '\t':
                 w("\\t");
                 break;
-            
+
             default:
                 if (isControl(c))
                 {
@@ -1220,7 +1220,7 @@ unittest
     wstring escapedw = `\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n`w;
     dstring strd = "\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n"d;
     dstring escapedd = `\u009cPijamalı\\hasta\tyağız\fşoföre\bçabucak\"güvendi.\r\n`d;
-    
+
     Appender!(char[]) strBuf = appender!(char[]);
     escapeString(
         str,
@@ -1276,7 +1276,7 @@ unittest
     );
     assert(strBuf[] == escaped);
     strBuf.clear();
-    
+
     Appender!(wchar[]) strwBuf = appender!(wchar[]);
     escapeString(
         str,
@@ -1332,7 +1332,7 @@ unittest
     );
     assert(strwBuf[] == escapedw);
     strwBuf.clear();
-    
+
     Appender!(dchar[]) strdBuf = appender!(dchar[]);
     escapeString(
         str,
@@ -1415,9 +1415,9 @@ void serializeKeyValuePair(K, V, Char)(scope void delegate(const(Char)[]) w, K k
         outputJSONKey(key, (const(Char)[] s) { escapeString(s, w, fo.preferSingleQuotes); });
         w(fo.quoteText);
     }
-    
+
     w(fo.spaceAfterColon ? ": ": ":");
-    
+
     serializeImpl(w, value, fo);
 }
 
@@ -1429,16 +1429,16 @@ void serializeImpl(T : V[K], Char, V, K)(scope void delegate(const(Char)[]) w, T
         w("{}");
         return;
     }
-    
+
     if (fo.lineBreaks)
         w("{\n");
     else
         w("{");
-    
+
     FormattingOptions indented = fo.indent();
-    
+
     doIndentation(w, indented);
-    
+
     bool first = true;
     foreach(k, v; val)
     {
@@ -1451,7 +1451,7 @@ void serializeImpl(T : V[K], Char, V, K)(scope void delegate(const(Char)[]) w, T
                 w("\n");
             doIndentation(w, indented);
         }
-        
+
         serializeKeyValuePair(w, k, v, false, indented);
     }
     if (fo.trailingCommas)
@@ -1527,7 +1527,7 @@ void serializeAllMembers(T, Char)(scope void delegate(const(Char)[]) w, auto ref
                 serializeKeyValuePair(w, n, __traits(getMember, val, n), true, fo);
         }
     }
-    if (fo.trailingCommas)
+    if (!first && fo.trailingCommas)
         w(fo.spaceBetweenItems ? ", ": ",");
 }
 
@@ -1587,9 +1587,9 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val, For
             w("[\n");
         else
             w("[");
-        
+
         doIndentation(w, indented);
-        
+
         bool first = true;
         foreach(ref item; val)
         {
@@ -1602,10 +1602,10 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val, For
                     w("\n");
                 doIndentation(w, indented);
             }
-            
+
             serializeImpl(w, item, indented);
         }
-        if (fo.trailingCommas)
+        if (!first && fo.trailingCommas)
             w(fo.spaceBetweenItems ? ", ": ",");
         if (fo.lineBreaks)
             w("\n");
@@ -1618,11 +1618,11 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, ref T val, For
             w("{\n");
         else
             w("{");
-        
+
         doIndentation(w, indented);
-        
+
         serializeAllMembers(w, val, indented);
-        
+
         if (fo.lineBreaks)
             w("\n");
         doIndentation(w, fo);
@@ -1651,13 +1651,13 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val, Formatt
             w("{\n");
         else
             w("{");
-        
+
         FormattingOptions indented = fo.indent();
-        
+
         doIndentation(w, indented);
-        
+
         serializeAllMembers(w, val, indented);
-        
+
         if (fo.lineBreaks)
             w("\n");
         doIndentation(w, fo);
@@ -1700,7 +1700,7 @@ void serializeImpl(T, Char)(scope void delegate(const(Char)[]) w, T val, Formatt
     if (!is(T == enum) && isNumeric!T)
 {
     import std.math.traits;
-    
+
     static if (isFloatingPoint!T)
     {
         if (isNaN(val))
@@ -1938,7 +1938,7 @@ unittest
         assert(s2.obj1.e == -0x42);
         assert(s2.arr == ["abc", "def"]);
     }}
-} 
+}
 
 // validate fromJSON works with structs
 unittest
