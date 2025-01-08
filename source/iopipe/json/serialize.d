@@ -369,15 +369,23 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
         {
             // have to do this somewhat manually, as there is no function to
             // properly parse the "0x" in phobos
-            int sign = 1;
+            static if(!isUnsigned!T)
+                bool negative = false;
             switch(window[0])
             {
                 case '0':
                     window = window[2 .. $];
                     break;
                 case '-':
-                    sign = -1;
-                    window = window[3 .. $];
+                    static if(isUnsigned!T)
+                    {
+                        throw new JSONIopipeException(format("Parsing %s: Encountered negative value", T.stringof));
+                    }
+                    else
+                    {
+                        negative = true;
+                        window = window[3 .. $];
+                    }
                     break;
                 case '+':
                     window = window[3 .. $];
@@ -385,7 +393,12 @@ private void deserializeImpl(T, JT)(ref JT tokenizer, ref T item, ReleasePolicy)
                 default:
                     assert(false, "invalid hex number detected! " ~ window);
             }
-            item = window.parse!T(16) * sign;
+            item = window.parse!T(16);
+            static if(!isUnsigned!T)
+            {
+                if (negative)
+                    item = -item;
+            }
         }
         else
             item = window.parse!T;
